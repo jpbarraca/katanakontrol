@@ -1,5 +1,5 @@
 // ==========================================================
-// PARAMETRIC GUITAR FOOTSWITCH ENCLOSURE - TOP-MOUNT LCD
+// PARAMETRIC GUITAR FOOTSWITCH ENCLOSURE - WALLS FIXED
 // ==========================================================
 
 /* [General Settings] */
@@ -16,7 +16,7 @@ lip_width = 2.0;
 lcd_w = 60; lcd_h = 45;
 lcd_mount_x_dist = 70; lcd_mount_y_dist = 40; 
 lcd_standoff_h = 5;    
-lcd_mount_hole_dia = 3.2; // Diameter for LCD mounting screws (e.g. M3)
+lcd_mount_hole_dia = 3.2; 
 side_switch_x_dist = 140; 
 side_switch_y_offset = 45; 
 
@@ -44,7 +44,6 @@ pi_screw_dia = 2.4;
 $fn = 64; 
 
 // --- Computed Values ---
-// Angle of the slant: $angle = \arctan\left(\frac{high\_height - low\_height}{depth}\right)$
 angle = atan((high_height - low_height) / depth);
 lid_length = sqrt(pow(depth, 2) + pow(high_height - low_height, 2));
 
@@ -69,36 +68,49 @@ module rounded_wedge_base(w, d, h_low, h_high, r) {
 }
 
 module enclosure_body() {
+    // A very large number to ensure cuts extend far beyond the object
+    big = width * 10; 
+
     difference() {
+        // 1. BASE GEOMETRY
         rounded_wedge_base(width, depth, low_height, high_height, corner_radius);
 
+        // 2. HOLLOW OUTSIDE
         translate([shell_thickness, shell_thickness, shell_thickness])
             rounded_wedge_base(
                 width - shell_thickness*2, depth - shell_thickness*2, 
-                low_height + 10, high_height + 10, 
+                low_height + 20, high_height + 20, 
                 max(0.1, corner_radius - shell_thickness)
             );
 
-        // Rear Connectivity
+        // 3. REAR PORTS
         translate([width/4, depth + 1, (high_height+low_height)/4]) 
             rotate([90,0,0]) cylinder(d=dc_jack_dia, h=shell_thickness*4, center=true);
         translate([3*width/4, depth + 1, (high_height+low_height)/4]) 
             rotate([90,0,0]) cube([usb_c_w, usb_c_h, shell_thickness*4], center=true);
-            
-        // Slant Cut for Lip
-        translate([0, 0, low_height - lip_depth]) 
+
+        // 4. THE GLOBAL TOP TRIM (Fixes the side walls)
+        // This cuts everything above the slanted plane of the box
+        translate([width/2, 0, low_height]) 
             rotate([angle, 0, 0]) 
-            translate([lip_width, 0, 0]) 
-            cube([width - (lip_width*2), depth * 2, high_height]);
-        
-        // Final trim for wall tops
-        translate([0,0, low_height]) rotate([angle, 0, 0])
-            translate([-50, -50, 0]) cube([width+100, depth*2, 100]);
+            translate([0, big/2, big/2]) 
+            cube([big, big, big], center=true);
+
+        // 5. THE LIP RECESSED CUT
+        // Cuts the inner shelf 2.5mm deeper than the top edge
+        translate([width/2, 0, low_height - lip_depth]) 
+            rotate([angle, 0, 0]) 
+            translate([0, big/2, big/2]) 
+            cube([width - (lip_width*2), big, big], center=true);
     }
 
+    // 6. INTERNAL PILLARS & STANDOFFS
     intersection() {
+        // Keeps everything within the outer wedge bounds
         rounded_wedge_base(width, depth, low_height, high_height, corner_radius);
+        
         union() {
+            // Pillars (shaved by the same slant angle)
             difference() {
                 union() {
                     b_off = max(boss_dia/2, corner_radius); 
@@ -113,10 +125,12 @@ module enclosure_body() {
                         translate([x_pos, pillar_y, 0]) screw_boss(high_height, boss_dia, screw_hole_dia);
                     }
                 }
-                translate([0, 0, low_height - lip_depth]) 
-                    rotate([angle, 0, 0]) translate([-50, -50, 0]) cube([width+100, depth*2, high_height]);
+                // Trim pillars to match lid underside
+                translate([width/2, 0, low_height - lip_depth]) 
+                    rotate([angle, 0, 0]) translate([0, big/2, big/2]) cube([big, big, big], center=true);
             }
-            // Floor Standoffs for Internal Boards
+
+            // PCB Standoffs (Floor based)
             translate([width/2 + pi_offset[0], depth/2 + pi_offset[1], shell_thickness])
                 for(x=[-29, 29], y=[-11.5, 11.5]) translate([x,y,0]) screw_boss(5, 6, pi_screw_dia);
             for(off = [pcb1_offset, pcb2_offset])
@@ -137,37 +151,35 @@ module top_lid() {
             translate([width-corner_radius, lid_length-corner_radius, 0]) cylinder(r=corner_radius, h=lid_thickness);
         }
         
-        // 1. Footswitch Holes
+        // Footswitch holes
         for (i = [0 : switches_per_row - 1]) {
             x_pos = edge_margin + (i * switch_spacing);
             translate([x_pos, row_1_y, -1]) cylinder(d=switch_hole_dia, h=lid_thickness + 2);
             translate([x_pos, row_2_y, -1]) cylinder(d=switch_hole_dia, h=lid_thickness + 2);
         }
         
-        // 2. LCD Main Cutout
+        // LCD and Side Switches
         translate([width/2 - lcd_w/2, lcd_center_y - lcd_h/2, -1]) cube([lcd_w, lcd_h, lid_thickness + 2]);
-
-        // 3. Side Switch Holes
         translate([width/2 - side_switch_x_dist/2, lcd_center_y, -1]) cylinder(d=switch_hole_dia, h=lid_thickness + 2);
         translate([width/2 + side_switch_x_dist/2, lcd_center_y, -1]) cylinder(d=switch_hole_dia, h=lid_thickness + 2);
 
-        // 4. LCD EXTERNAL MOUNTING HOLES (New)
+        // External LCD Mounting Holes with Countersinks
         for(x = [-lcd_mount_x_dist/2, lcd_mount_x_dist/2], y = [-lcd_mount_y_dist/2, lcd_mount_y_dist/2]) {
             translate([width/2 + x, lcd_center_y + y, -1]) {
                 cylinder(d=lcd_mount_hole_dia, h=lid_thickness + 2);
-                // Countersink for the LCD screws
                 translate([0,0, lid_thickness - 1.5]) cylinder(d1=lcd_mount_hole_dia, d2=countersink_dia, h=2);
             }
         }
 
-        // 5. Lid-to-Enclosure Mounting Holes
+        // Lid-to-Enclosure Screws
         b_off = max(boss_dia/2, corner_radius);
         l_offset = b_off / cos(angle);
         mid_y = ((row_1_y + row_2_y) / 2) / cos(angle);
-        mount_points = [[b_off, l_offset], [width-b_off, l_offset], [b_off, lid_length-l_offset], [width-b_off, lid_length-l_offset]];
-        for (p = mount_points) translate([p[0], p[1], -1]) {
-            cylinder(d=screw_hole_dia, h=lid_thickness + 2);
-            translate([0,0, lid_thickness - 1.5]) cylinder(d1=screw_hole_dia, d2=countersink_dia, h=2.5);
+        for (p = [[b_off, l_offset], [width-b_off, l_offset], [b_off, lid_length-l_offset], [width-b_off, lid_length-l_offset]]) {
+            translate([p[0], p[1], -1]) {
+                cylinder(d=screw_hole_dia, h=lid_thickness + 2);
+                translate([0,0, lid_thickness - 1.5]) cylinder(d1=screw_hole_dia, d2=countersink_dia, h=2.5);
+            }
         }
         for (i = [0 : switches_per_row - 2]) {
             x_pos = edge_margin + (i * switch_spacing) + (switch_spacing / 2);
@@ -178,7 +190,7 @@ module top_lid() {
         }
     }
 
-    // LCD UNDERSIDE SPACERS (Now with through-holes)
+    // LCD Spacers
     translate([width/2, lcd_center_y, 0]) {
         for(x = [-lcd_mount_x_dist/2, lcd_mount_x_dist/2], y = [-lcd_mount_y_dist/2, lcd_mount_y_dist/2]) {
             translate([x, y, -lcd_standoff_h]) 
