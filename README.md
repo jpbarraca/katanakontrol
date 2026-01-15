@@ -1,7 +1,7 @@
 # 🎸 Boss Katana Gen 3 Virtual Footswitch
 
 > **⚠️ DISCLAIMER: VIBE CODED HACK**
-> This project was built through a process of "vibe coding". It is a glorious hack held together by high-level logic, real-time MIDI SysEx streams, and pure vibes. It works surprisingly well, but expect the soul of a machine in the code.
+> It is a glorious hack held together by high-level logic, real-time MIDI SysEx streams, and pure vibes. It works surprisingly well, but expect the soul of a machine in the code.
 
 This is a custom-built footswitch and remote controller for the **Boss Katana Gen 3**. It transforms a Raspberry Pi into a dual-interface powerhouse: a physical stomp-box with an integrated LCD and a real-time WebSocket-powered web interface that mimics high-end guitar processors.
 
