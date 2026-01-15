@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Katana Virtual Pedal</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        body { 
+            background: #000; color: #fff; font-family: 'Segoe UI', sans-serif; 
+            margin: 0; padding: 0; overflow: hidden; display: flex; 
+            justify-content: center; align-items: center; height: 100vh; 
+        }
+        
+        .pedal-board { 
+            position: relative; width: 95vw; height: 95vh; max-width: 1000px; max-height: 800px;
+            background: #111; border-radius: 20px; border: 4px solid #222;
+            display: grid; grid-template-columns: 150px 1fr 150px; grid-template-rows: 1fr 150px; gap: 20px; padding: 20px;
+            box-shadow: 0 0 50px rgba(0,0,0,1), inset 0 0 20px rgba(255,255,255,0.05);
+        }
+
+        /* The LCD Screen in the middle */
+        .lcd-container { 
+            grid-column: 2; grid-row: 1; background: #050505; border: 10px solid #2a2a2a; border-radius: 10px;
+            display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); gap: 4px; padding: 4px;
+            box-shadow: inset 0 0 15px #000;
+        }
+        .lcd-segment { border-radius: 3px; display: flex; flex-direction: column; overflow: hidden; font-size: 0.7em; }
+        .lcd-label { background: #0a024d; color: white; padding: 2px 4px; font-weight: bold; text-transform: uppercase; border-bottom: 1px solid rgba(255,255,255,0.1); }
+        .lcd-value { flex-grow: 1; display: flex; align-items: center; justify-content: center; font-weight: 800; text-align: center; }
+
+        /* Stomp Switches on sides and bottom */
+        .side-switches { display: flex; flex-direction: column; justify-content: space-around; align-items: center; }
+        .bottom-switches { grid-column: 1 / span 3; display: flex; justify-content: space-around; align-items: center; }
+
+        .stomp-wrapper { display: flex; flex-direction: column; align-items: center; gap: 8px; cursor: pointer; }
+        .stomp-led { width: 12px; height: 12px; border-radius: 50%; background: #333; box-shadow: 0 0 2px #000; transition: all 0.2s; }
+        .stomp-switch { 
+            width: 60px; height: 60px; background: radial-gradient(circle at 30% 30%, #888, #222); 
+            border-radius: 50%; border: 4px solid #444; box-shadow: 0 6px 0 #111, 0 10px 15px rgba(0,0,0,0.5);
+            transition: transform 0.1s, box-shadow 0.1s;
+        }
+        .stomp-wrapper:active .stomp-switch { transform: translateY(4px); box-shadow: 0 2px 0 #111; }
+        .stomp-label { font-size: 0.7em; font-weight: bold; color: #888; text-transform: uppercase; letter-spacing: 1px; }
+
+        /* Overlay for Edit Mode */
+        .edit-overlay { 
+            position: absolute; top:0; left:0; width:100%; height:100%; background: rgba(255,0,0,0.4); 
+            display: none; justify-content: center; align-items: center; z-index: 100; border-radius: 16px; pointer-events: none;
+        }
+        .edit-overlay.show { display: flex; }
+        .edit-text { background: #000; color: #fff; padding: 20px; border: 4px solid red; font-weight: bold; font-size: 1.5em; border-radius: 10px; }
+    </style>
+</head>
+<body>
+    <div class="pedal-board">
+        <div class="edit-overlay" id="editOverlay"><div class="edit-text">SAVE TO PRESET SLOT</div></div>
+        
+        <!-- Left Side: Buttons 4, 5, 6 -->
+        <div class="side-switches" id="leftSwitches"></div>
+
+        <!-- Middle: LCD -->
+        <div class="lcd-container" id="lcd"></div>
+
+        <!-- Right Side: Mode, Edit, Sync -->
+        <div class="side-switches" id="rightSwitches"></div>
+
+        <!-- Bottom: Buttons 1, 2, 3 -->
+        <div class="bottom-switches" id="bottomSwitches"></div>
+    </div>
+
+    <script>
+        const socket = io();
+        const CAT_COLORS = {{ cat_colors|tojson }};
+        const STATE_COLORS = {{ state_colors|tojson }};
+        const HIDDEN = {{ hidden|tojson }};
+
+        function createStomp(id, labelText) {
+            return `
+                <div class="stomp-wrapper" id="wrap-${id}">
+                    <div class="stomp-led" id="led-${id}"></div>
+                    <div class="stomp-switch"></div>
+                    <div class="stomp-label">${labelText}</div>
+                </div>
+            `;
+        }
+
+        function renderUI(data) {
+            document.getElementById('editOverlay').className = data.edit_mode ? 'edit-overlay show' : 'edit-overlay';
+            
+            // 1. Render LCD Segments
+            const lcd = document.getElementById('lcd');
+            lcd.innerHTML = '';
+            const allKeys = Object.keys(data.settings);
+            const displayKeys = allKeys.filter(k => !HIDDEN.includes(k));
+
+            for(let i=0; i<9; i++) {
+                const div = document.createElement('div');
+                div.className = 'lcd-segment';
+                
+                if (i === 8) {
+                    div.style.background = '#222';
+                    div.innerHTML = `<div class="lcd-label" style="background:#444">MODE</div><div class="lcd-value" style="color:${data.mode === 'DIRECT' ? 'cyan' : 'magenta'}">${data.mode}</div>`;
+                } else {
+                    const key = displayKeys[i];
+                    if (!key) { div.style.background = '#000'; lcd.appendChild(div); continue; }
+                    const val = data.settings[key];
+                    const active = data.active[key];
+                    const valText = active ? val : 'OFF';
+                    let bg = active ? (STATE_COLORS[valText] || CAT_COLORS[data.cats[key]]) : '#222';
+                    const textCol = (['YELLOW', 'YEL', 'GREEN', 'GRN'].includes(valText)) ? 'black' : 'white';
+                    div.style.backgroundColor = bg;
+                    div.style.color = textCol;
+                    div.innerHTML = `<div class="lcd-label">${key}</div><div class="lcd-value">${valText}</div>`;
+                }
+                lcd.appendChild(div);
+            }
+
+            // 2. Render External Switches (Sides and Bottom)
+            const left = document.getElementById('leftSwitches');
+            const right = document.getElementById('rightSwitches');
+            const bottom = document.getElementById('bottomSwitches');
+
+            // Arrangement of 9 stomp points: BTN 1-6, Mode, Edit, and Sync
+            const stompMap = [
+                {id: 'BTN_4', label: 'MOD', target: 'left'},
+                {id: 'BTN_5', label: 'FX', target: 'left'},
+                {id: 'BTN_6', label: 'SOLO', target: 'left'},
+                {id: 'MODE',  label: 'MODE', target: 'right'},
+                {id: 'EDIT',  label: 'EDIT', target: 'right'},
+                {id: 'SYNC',  label: 'SYNC', target: 'right'},
+                {id: 'BTN_1', label: 'AMP/CH1', target: 'bottom'},
+                {id: 'BTN_2', label: 'VAR/CH2', target: 'bottom'},
+                {id: 'BTN_3', label: 'BST/CH3', target: 'bottom'}
+            ];
+
+            left.innerHTML = ''; right.innerHTML = ''; bottom.innerHTML = '';
+
+            stompMap.forEach(s => {
+                const container = s.target === 'left' ? left : (s.target === 'right' ? right : bottom);
+                const wrap = document.createElement('div');
+                wrap.innerHTML = createStomp(s.id, s.label);
+                const el = wrap.firstElementChild;
+                
+                // LED Logic
+                const led = el.querySelector('.stomp-led');
+                if (s.id.startsWith('BTN')) {
+                    const settingKey = data.mapped[s.id]; 
+                    const isActive = data.active[settingKey];
+                    const valText = data.settings[settingKey];
+                    if (isActive) {
+                        led.style.background = STATE_COLORS[valText] || CAT_COLORS[data.cats[settingKey]] || 'red';
+                        led.style.boxShadow = `0 0 10px ${led.style.background}`;
+                    }
+                } else if (s.id === 'MODE') {
+                    led.style.background = data.mode === 'DIRECT' ? 'cyan' : 'magenta';
+                    led.style.boxShadow = `0 0 10px ${led.style.background}`;
+                } else if (s.id === 'EDIT') {
+                    if (data.edit_mode) {
+                        led.style.background = 'red';
+                        led.style.boxShadow = `0 0 15px red`;
+                    }
+                }
+
+                // Click Logic
+                el.onclick = () => {
+                    if (s.id === 'MODE') socket.emit('toggle_mode');
+                    else if (s.id === 'EDIT') socket.emit('toggle_edit');
+                    else if (s.id === 'SYNC') location.reload();
+                    else {
+                        if (data.edit_mode) {
+                            socket.emit('save_to_slot', { btn_id: s.id });
+                        } else {
+                            const now = Date.now();
+                            const action = (now - (el.lastTouch || 0) < 400) ? 'toggle' : 'cycle';
+                            socket.emit('control_by_btn', { btn_id: s.id, action: action });
+                            el.lastTouch = now;
+                        }
+                    }
+                };
+                container.appendChild(el);
+            });
+        }
+
+        socket.on('state_update', (data) => renderUI(data));
+    </script>
+</body>
+</html>
