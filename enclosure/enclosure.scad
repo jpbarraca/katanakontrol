@@ -1,44 +1,54 @@
 // ==========================================================
-// PARAMETRIC GUITAR FOOTSWITCH ENCLOSURE - WALLS FIXED
+// PARAMETRIC GUITAR FOOTSWITCH ENCLOSURE
 // ==========================================================
 
 /* [General Settings] */
+generate_lid = true;
+generate_body = false;
+
 switches_per_row = 4; 
-switch_spacing = 45;  
-edge_margin = 25;
-shell_thickness = 4.0; 
-lid_thickness = 5.0;   
-corner_radius = 8;     
+switch_spacing = 40;  
+edge_margin = 20;
+shell_thickness = 5.0; 
+lid_thickness = 2.0;   
+corner_radius = 5;     
 lip_depth = 2.5;       
-lip_width = 2.0;       
+lip_width = 0.0;       
+
+/* [Physical Dimensions] */
+low_height = 35; 
+high_height = 60; 
+depth = 140;      
+width = (switches_per_row - 1) * switch_spacing + (edge_margin * 2);
 
 /* [LCD & Side Switch Settings] */
-lcd_w = 60; lcd_h = 45;
-lcd_mount_x_dist = 70; lcd_mount_y_dist = 40; 
-lcd_standoff_h = 5;    
+lcd_w = 62; 
+lcd_h = 43;
+lcd_mount_x_dist = 68; 
+lcd_mount_y_dist = 37; 
+lcd_standoff_h = 0;    
 lcd_mount_hole_dia = 3.2; 
-side_switch_x_dist = 140; 
+side_switch_x_dist = 120; 
 side_switch_y_offset = 45; 
 
 /* [Component Positioning] */
-row_1_y = 35;  row_2_y = 80;  
-lcd_y_offset = 45;        
+row_1_y = 20;  
+row_2_y = row_1_y + switch_spacing;  
+lcd_y_offset = 40;        
 
 /* [Internal Board Offsets] */
 pi_offset = [-45, 10];   
 pcb1_offset = [45, 10];  
 pcb2_offset = [0, 60];   
 
-/* [Physical Dimensions] */
-low_height = 35; high_height = 75; 
-depth = 195;      
-width = (switches_per_row - 1) * switch_spacing + (edge_margin * 2);
-
 /* [Hardware Diameters] */
-switch_hole_dia = 12.5; dc_jack_dia = 11.5;
-usb_c_w = 13; usb_c_h = 7;
-screw_hole_dia = 3.5; boss_dia = 10;
-countersink_dia = 6.5; 
+switch_hole_dia = 12.5; 
+dc_jack_dia = 11.5;
+usb_c_w = 13; 
+usb_c_h = 7;
+screw_hole_dia = 3.5; 
+boss_dia = 10;
+countersink_dia = 0; 
 pi_screw_dia = 2.4;    
 
 $fn = 64; 
@@ -89,15 +99,13 @@ module enclosure_body() {
         translate([3*width/4, depth + 1, (high_height+low_height)/4]) 
             rotate([90,0,0]) cube([usb_c_w, usb_c_h, shell_thickness*4], center=true);
 
-        // 4. THE GLOBAL TOP TRIM (Fixes the side walls)
-        // This cuts everything above the slanted plane of the box
+        // 4. THE GLOBAL TOP TRIM 
         translate([width/2, 0, low_height]) 
             rotate([angle, 0, 0]) 
             translate([0, big/2, big/2]) 
             cube([big, big, big], center=true);
 
         // 5. THE LIP RECESSED CUT
-        // Cuts the inner shelf 2.5mm deeper than the top edge
         translate([width/2, 0, low_height - lip_depth]) 
             rotate([angle, 0, 0]) 
             translate([0, big/2, big/2]) 
@@ -203,5 +211,11 @@ module top_lid() {
 }
 
 // --- Render ---
-enclosure_body();
-translate([width + 25, 0, 0]) top_lid();
+if (generate_body){
+    enclosure_body();
+}
+
+if (generate_lid){
+    translate([width + 25, 0, 0]);
+    top_lid();
+}
