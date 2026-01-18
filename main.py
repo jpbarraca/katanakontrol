@@ -17,8 +17,9 @@ CONFIG_FILE = "config.json"
 
 # Hardcoded Defaults
 DEFAULT_GPIO_CONFIG = {
-    "BTN_1": 5, "BTN_2": 6, "BTN_3": 13,
-    "BTN_4": 19, "BTN_5": 26, "BTN_6": 21
+    "BTN_1": 13, "BTN_2": 5, "BTN_3": 12,
+    "BTN_4": 19, "BTN_5": 6, "BTN_6": 26,
+    "BTN_7": 16, "BTN_8": 21, "BTN_9": 20
 }
 
 DEFAULT_MODE_MAPPINGS = {
@@ -364,7 +365,7 @@ class WebHandler:
         self.socketio.emit('state_update', self._get_state())
 
     def run(self, host='0.0.0.0', port=5000):
-        self.socketio.run(self.app, host=host, port=port, debug=False, use_reloader=False)
+        self.socketio.run(self.app, host=host, port=port, debug=False, use_reloader=False, allow_unsafe_werkzeug=True)
 
 # --- GLOBAL STATE & HANDLERS ---
 current_mode = "DIRECT"
