@@ -393,12 +393,15 @@ class LCDHandler:
                     is_active = active_states.get(key, True)
                     val_text = SETTINGS[key]["vals"][current_vals[key]] if is_active else "OFF"
 
-                    # Determine text color based on the value state
-                    # Set to black if color is GREEN, RED, or YELLOW; otherwise white
-                    text_color = "black" if val_text.upper() in ["GREEN", "YELLOW", "RED", "GRN", "YEL"] else "white"
-
-                    # Choose colors
-                    fill = STATE_COLORS.get(val_text, CAT_COLORS.get(SETTINGS[key]["cat"], "#444444")) if is_active else STATE_COLORS["OFF"]
+                    # Determine fill color and text color logic
+                    if key == "Amp":
+                        # Amp Type: No specific color set (using dark neutral)
+                        fill = "#111111"
+                        text_color = "white"
+                    else:
+                        # Effects: Color based on state
+                        text_color = "black" if val_text.upper() in ["GREEN", "YELLOW", "RED", "GRN", "YEL"] else "white"
+                        fill = STATE_COLORS.get(val_text, CAT_COLORS.get(SETTINGS[key]["cat"], "#444444")) if is_active else STATE_COLORS["OFF"]
 
                     # Slot Drawing
                     # Header bar (Title Bar)
@@ -406,11 +409,14 @@ class LCDHandler:
                     # Body (Value Body)
                     draw.rectangle([x, y+label_h, x+slot_w-2, y+slot_h-2], outline="#333", fill=fill)
 
-                    # Text rendering: Only display the block header (Title). 
-                    # The value text is removed for the 8 squares (indices 0-7) as indicated by your request.
+                    # Text rendering:
                     if self.mode_font:
-                        # Draw Title (Block Header) - e.g., "BOOST", "MOD"
+                        # Draw Title (Block Header) - e.g., "BOOST", "MOD", "AMP"
                         draw.text((x+4, y+2), key.upper()[:7], fill="white", font=self.mode_font)
+                        
+                        # Only draw value text for the "Amp" block
+                        if key == "Amp" and self.value_font:
+                            draw.text((x+6, y+label_h+2), val_text[:6], fill=text_color, font=self.value_font)
 
 class WebHandler:
     """Manages the optional Flask web interface for remote control."""
@@ -540,6 +546,7 @@ if __name__ == "__main__":
         delayed_init()
         threading.Thread(target=refresh_worker, daemon=True).start()
         if ENABLE_WEB: web_server.run()
+    # Explicitly pass target= to avoid argument interpretation errors in certain Python versions
     threading.Thread(target=background_init, daemon=True).start()
     while 'mido' not in globals(): time.sleep(0.1)
     katana.connect(start_time)
