@@ -54,7 +54,7 @@ def delayed_init() -> None:
     This significantly improves perceived startup time on Raspberry Pi.
     """
     global mido, json, Button, Flask, SocketIO, emit, spi, ili9341, canvas, Image, ImageDraw, ImageFont
-    global GPIO_CONFIG, MODE_MAPPINGS, PRESETS, web_server
+    global GPIO_CONFIG, MODE_MAPPINGS, PRESETS, LCD_ORDER, web_server
 
     import mido
     import json
@@ -103,7 +103,7 @@ DEFAULT_GPIO_CONFIG: Dict[str, int] = {
 
 DEFAULT_MODE_MAPPINGS: Dict[str, Dict[str, str]] = {
     "DIRECT": {
-        "BTN_1": "Amp Type", "BTN_2": "Variation", "BTN_3": "Boost",
+        "BTN_1": "Amp", "BTN_2": "Variation", "BTN_3": "Boost",
         "BTN_4": "MOD",      "BTN_5": "FX",        "BTN_6": "Solo"
     },
     "PRESET": {
@@ -121,13 +121,17 @@ DEFAULT_PRESETS: Dict[str, Dict[str, str]] = {
     }
 }
 
+# New feature: Default layout of elements on the LCD grid
+DEFAULT_LCD_ORDER: List[str] = ["Amp", "Var", "Delay", "Revrb", "MOD", "FX", "Boost", "Bloom"]
+
 GPIO_CONFIG: Dict[str, int] = {}
 MODE_MAPPINGS: Dict[str, Dict[str, str]] = {}
 PRESETS: Dict[str, Dict[str, str]] = {}
+LCD_ORDER: List[str] = []
 
 def load_config() -> None:
     """Reads configuration from config.json or falls back to hardcoded defaults."""
-    global GPIO_CONFIG, MODE_MAPPINGS, PRESETS
+    global GPIO_CONFIG, MODE_MAPPINGS, PRESETS, LCD_ORDER
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, 'r') as f:
@@ -135,16 +139,22 @@ def load_config() -> None:
                 GPIO_CONFIG = data.get("GPIO_CONFIG", DEFAULT_GPIO_CONFIG)
                 MODE_MAPPINGS = data.get("MODE_MAPPINGS", DEFAULT_MODE_MAPPINGS)
                 PRESETS = data.get("PRESETS", DEFAULT_PRESETS)
+                LCD_ORDER = data.get("LCD_ORDER", DEFAULT_LCD_ORDER)
                 if PRINT_DEBUG: print(f"[DEBUG] Config loaded from {CONFIG_FILE}")
                 return
         except Exception: pass
-    GPIO_CONFIG, MODE_MAPPINGS, PRESETS = DEFAULT_GPIO_CONFIG, DEFAULT_MODE_MAPPINGS, DEFAULT_PRESETS
+    GPIO_CONFIG, MODE_MAPPINGS, PRESETS, LCD_ORDER = DEFAULT_GPIO_CONFIG, DEFAULT_MODE_MAPPINGS, DEFAULT_PRESETS, DEFAULT_LCD_ORDER
     if PRINT_DEBUG: print("[DEBUG] Defaults loaded")
 
 def save_config() -> None:
-    """Writes the current runtime configuration (mappings/presets) to config.json."""
+    """Writes the current runtime configuration (mappings/presets/order) to config.json."""
     try:
-        data = {"GPIO_CONFIG": GPIO_CONFIG, "MODE_MAPPINGS": MODE_MAPPINGS, "PRESETS": PRESETS}
+        data = {
+            "GPIO_CONFIG": GPIO_CONFIG, 
+            "MODE_MAPPINGS": MODE_MAPPINGS, 
+            "PRESETS": PRESETS,
+            "LCD_ORDER": LCD_ORDER
+        }
         with open(CONFIG_FILE, 'w') as f: json.dump(data, f, indent=4)
         if PRINT_DEBUG: print(f"[DEBUG] Config saved to {CONFIG_FILE}")
     except Exception: pass
@@ -383,13 +393,18 @@ class LCDHandler:
                     draw.text((10, 5), f"MODE: {current_mode}", fill="cyan" if current_mode == "DIRECT" else "magenta", font=self.label_font)
                     draw.text((12, 35), app_status if current_mode != "PRESET" else "SELECT PRESET", fill="green", font=self.mode_font)
 
-                # Explicitly ordered display keys to place MOD, FX, BOOST, AMP on the bottom row
-                display_keys = ["Var", "Bloom", "Delay", "Revrb", "MOD", "FX", "Boost", "Amp"]
+                # Feature: Elements are now positioned based on the LCD_ORDER configuration
+                # If configuration is missing or shorter than 8, we fallback to DEFAULT_LCD_ORDER logic
+                order_to_use = LCD_ORDER if len(LCD_ORDER) >= 8 else DEFAULT_LCD_ORDER
                 
-                for i in range(min(8, len(display_keys))):
+                for i in range(min(8, len(order_to_use))):
                     col, row = i % 4, i // 4
                     x, y = col * slot_w, row0_h + (row * slot_h)
-                    key = display_keys[i]
+                    key = order_to_use[i]
+                    
+                    # Safety check for invalid keys in config
+                    if key not in SETTINGS: continue
+                    
                     is_active = active_states.get(key, True)
                     val_text = SETTINGS[key]["vals"][current_vals[key]] if is_active else "OFF"
 
