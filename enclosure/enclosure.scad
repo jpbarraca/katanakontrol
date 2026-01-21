@@ -3,8 +3,8 @@
 // ==========================================================
 
 /* [General Settings] */
-generate_lid = true;
-generate_body = false;
+generate_lid = false;
+generate_body = true;
 
 switches_per_row = 4; 
 switch_spacing = 40;  
@@ -35,12 +35,7 @@ side_switch_y_offset = 45;
 row_1_y = 20;  
 row_2_y = row_1_y + switch_spacing;  
 lcd_y_offset = 40;        
-
-/* [Internal Board Offsets] */
-pi_offset = [-45, 10];   
-pcb1_offset = [45, 10];  
-pcb2_offset = [0, 60];   
-
+  
 /* [Hardware Diameters] */
 switch_hole_dia = 12.5; 
 dc_jack_dia = 11.5;
@@ -97,7 +92,7 @@ module enclosure_body() {
         translate([width/4, depth + 1, (high_height+low_height)/4]) 
             rotate([90,0,0]) cylinder(d=dc_jack_dia, h=shell_thickness*4, center=true);
         translate([3*width/4, depth + 1, (high_height+low_height)/4]) 
-            rotate([90,0,0]) cube([usb_c_w, usb_c_h, shell_thickness*4], center=true);
+            rotate([90,0,0]) cylinder(d=dc_jack_dia, h=shell_thickness*4, center=true);
 
         // 4. THE GLOBAL TOP TRIM 
         translate([width/2, 0, low_height]) 
@@ -138,12 +133,6 @@ module enclosure_body() {
                     rotate([angle, 0, 0]) translate([0, big/2, big/2]) cube([big, big, big], center=true);
             }
 
-            // PCB Standoffs (Floor based)
-            translate([width/2 + pi_offset[0], depth/2 + pi_offset[1], shell_thickness])
-                for(x=[-29, 29], y=[-11.5, 11.5]) translate([x,y,0]) screw_boss(5, 6, pi_screw_dia);
-            for(off = [pcb1_offset, pcb2_offset])
-                translate([width/2 + off[0], depth/2 + off[1], shell_thickness])
-                    for(x=[-32.5, 32.5], y=[-12.5, 12.5]) translate([x,y,0]) screw_boss(5, 6, pi_screw_dia);
         }
     }
 }
