@@ -1,4 +1,4 @@
-# 🎸 Boss Katana Gen 3 Virtual Footswitch
+# 🎸 Boss Katana Gen 3 Footswitch
 
 > **⚠️ DISCLAIMER: VIBE CODED HACK**
 > It is a glorious hack held together by high-level logic, real-time MIDI SysEx streams, and pure vibes. It works surprisingly well, but expect the soul of a machine in the code. Consider it a personal experiment on development with minimal human interaction. No humans were harmed writing code!
