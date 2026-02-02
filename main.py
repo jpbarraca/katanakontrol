@@ -39,7 +39,7 @@ CMD_DT1: int = 0x12  # Data set command
 CMD_RQ1: int = 0x11  # Request data command
 CONFIG_FILE: str = "config.json"
 
-# --- GLOBAL STATE (Minimal) ---
+# --- GLOBAL STATE ---
 current_mode: str = "DIRECT"
 edit_mode: bool = False
 last_interaction_time: float = 0.0
@@ -91,7 +91,8 @@ def delayed_init() -> None:
         toggle_mode_fn=lambda: toggle_global_mode(),
         toggle_edit_fn=lambda: toggle_preset_edit(),
         save_preset_fn=lambda bid: save_preset_to_button(bid),
-        control_btn_fn=handle_web_control
+        control_btn_fn=handle_web_control,
+        update_map_fn=update_switch_mapping # Added mapping function
     )
 
 # --- CONFIGURATION PERSISTENCE ---
@@ -103,7 +104,7 @@ DEFAULT_GPIO_CONFIG: Dict[str, int] = {
 
 DEFAULT_MODE_MAPPINGS: Dict[str, Dict[str, str]] = {
     "DIRECT": {
-        "BTN_1": "Amp", "BTN_2": "Variation", "BTN_3": "Boost",
+        "BTN_1": "Amp", "BTN_2": "Var", "BTN_3": "Boost",
         "BTN_4": "MOD",      "BTN_5": "FX",        "BTN_6": "Solo"
     },
     "PRESET": {
@@ -114,14 +115,13 @@ DEFAULT_MODE_MAPPINGS: Dict[str, Dict[str, str]] = {
 DEFAULT_PRESETS: Dict[str, Dict[str, str]] = {
     "CLEAN_PRESET": {
         "Amp": "CLEAN", "Boost": "OFF", "MOD": "OFF",
-        "FX": "OFF", "Delay": "OFF", "Reverb": "GREEN", "Solo": "OFF"
+        "FX": "OFF", "Delay": "OFF", "Revrb": "GREEN", "Solo": "OFF"
     },
     "LEAD_PRESET": {
         "Amp": "BROWN", "Boost": "RED", "MOD": "GREEN", "Solo": "ON"
     }
 }
 
-# New feature: Default layout of elements on the LCD grid
 DEFAULT_LCD_ORDER: List[str] = ["Amp", "Var", "Delay", "Revrb", "MOD", "FX", "Boost", "Bloom"]
 
 GPIO_CONFIG: Dict[str, int] = {}
@@ -270,7 +270,7 @@ class KatanaHandler:
             self.outport.send(self._create_sysex_msg(CMD_RQ1, addr, size))
 
     def cycle_effect(self, key: str) -> None:
-        if self.app_status != "OK" or not self.outport: return
+        if self.app_status != "OK" or not self.outport or key not in SETTINGS: return
         self.current_vals[key] = (self.current_vals[key] + 1) % len(SETTINGS[key]["vals"])
         self.outport.send(self.msg_cache[key][self.current_vals[key]])
         if not self.active_states[key] and "sw_addr" in SETTINGS[key]:
@@ -279,7 +279,7 @@ class KatanaHandler:
         self.on_change()
 
     def toggle_effect(self, key: str) -> None:
-        if self.app_status != "OK" or not self.outport or "sw_addr" not in SETTINGS[key]: return
+        if self.app_status != "OK" or not self.outport or key not in SETTINGS or "sw_addr" not in SETTINGS[key]: return
         self.active_states[key] = not self.active_states[key]
         val = 0x01 if self.active_states[key] else 0x00
         self.outport.send(self._create_sysex_msg(CMD_DT1, SETTINGS[key]["sw_addr"], [val]))
@@ -394,15 +394,12 @@ class LCDHandler:
                     draw.text((12, 35), app_status if current_mode != "PRESET" else "SELECT PRESET", fill="green", font=self.mode_font)
 
                 # Feature: Elements are now positioned based on the LCD_ORDER configuration
-                # If configuration is missing or shorter than 8, we fallback to DEFAULT_LCD_ORDER logic
                 order_to_use = LCD_ORDER if len(LCD_ORDER) >= 8 else DEFAULT_LCD_ORDER
                 
                 for i in range(min(8, len(order_to_use))):
                     col, row = i % 4, i // 4
                     x, y = col * slot_w, row0_h + (row * slot_h)
                     key = order_to_use[i]
-                    
-                    # Safety check for invalid keys in config
                     if key not in SETTINGS: continue
                     
                     is_active = active_states.get(key, True)
@@ -410,36 +407,28 @@ class LCDHandler:
 
                     # Determine fill color and text color logic
                     if key == "Amp":
-                        # Amp Type: No specific color set (using dark neutral)
                         fill = "#111111"
                         text_color = "white"
                     else:
-                        # Effects: Color based on state
                         text_color = "black" if val_text.upper() in ["GREEN", "YELLOW", "RED", "GRN", "YEL"] else "white"
                         fill = STATE_COLORS.get(val_text, CAT_COLORS.get(SETTINGS[key]["cat"], "#444444")) if is_active else STATE_COLORS["OFF"]
 
                     # Slot Drawing
-                    # Header bar (Title Bar)
                     draw.rectangle([x, y, x+slot_w-2, y+label_h], outline="#333", fill=LABEL_BG_COLOR)
-                    # Body (Value Body)
                     draw.rectangle([x, y+label_h, x+slot_w-2, y+slot_h-2], outline="#333", fill=fill)
 
-                    # Text rendering:
                     if self.mode_font:
-                        # Draw Title (Block Header) - e.g., "BOOST", "MOD", "AMP"
                         draw.text((x+4, y+2), key.upper()[:7], fill="white", font=self.mode_font)
-                        
-                        # Only draw value text for the "Amp" block
                         if key == "Amp" and self.value_font:
                             draw.text((x+6, y+label_h+2), val_text[:6], fill=text_color, font=self.value_font)
 
 class WebHandler:
     """Manages the optional Flask web interface for remote control."""
-    def __init__(self, state_getter: Callable[[], Dict[str, Any]], toggle_mode_fn: Callable[[], None], toggle_edit_fn: Callable[[], None], save_preset_fn: Callable[[str], None], control_btn_fn: Callable[[str, str], None]) -> None:
+    def __init__(self, state_getter, toggle_mode_fn, toggle_edit_fn, save_preset_fn, control_btn_fn, update_map_fn) -> None:
         self.app: Flask = Flask(__name__)
         self.socketio: SocketIO = SocketIO(self.app, cors_allowed_origins="*", async_mode='threading')
         self._get_state, self._toggle_mode, self._toggle_edit = state_getter, toggle_mode_fn, toggle_edit_fn
-        self._save_preset, self._control_btn = save_preset_fn, control_btn_fn
+        self._save_preset, self._control_btn, self._update_map = save_preset_fn, control_btn_fn, update_map_fn
         self._setup_routes()
 
     def _setup_routes(self) -> None:
@@ -455,6 +444,8 @@ class WebHandler:
         def handle_save_to_slot(data: Dict[str, Any]) -> None: self._save_preset(data.get('btn_id', ""))
         @self.socketio.on('control_by_btn')
         def handle_control_by_btn(data: Dict[str, Any]) -> None: self._control_btn(data.get('btn_id', ""), data.get('action', ""))
+        @self.socketio.on('update_mapping')
+        def handle_update_mapping(data: Dict[str, Any]) -> None: self._update_map(data.get('mode'), data.get('btn_id'), data.get('target'))
 
     def push_state(self) -> None:
         self.socketio.emit('state_update', self._get_state())
@@ -480,6 +471,14 @@ def handle_web_control(btn_id: str, action: str) -> None:
     if current_mode == "PRESET": katana.apply_preset(target)
     else: katana.toggle_effect(target) if action == 'toggle' else katana.cycle_effect(target)
 
+def update_switch_mapping(mode: str, btn_id: str, target: str) -> None:
+    """Updates the mapping of a physical switch and saves to disk."""
+    if mode in MODE_MAPPINGS and btn_id in MODE_MAPPINGS[mode]:
+        MODE_MAPPINGS[mode][btn_id] = target
+        save_config()
+        update_ui_all()
+        if PRINT_DEBUG: print(f"[DEBUG] OP: Updated {mode} mapping for {btn_id} to {target}")
+
 def update_ui_all() -> None:
     """Triggers refresh for both the physical LCD and the web interface."""
     lcd.update(katana.app_status, current_mode, edit_mode, katana.current_vals, katana.active_states, start_time)
@@ -498,7 +497,6 @@ def refresh_worker() -> None:
         time.sleep(10.0)
 
 def toggle_global_mode() -> None:
-    """Switches between DIRECT control and PRESET selection."""
     global current_mode
     if edit_mode: return
     current_mode = "PRESET" if current_mode == "DIRECT" else "DIRECT"
@@ -506,14 +504,12 @@ def toggle_global_mode() -> None:
     update_ui_all()
 
 def toggle_preset_edit() -> None:
-    """Enables/disables the mode where next button press saves current state to a preset slot."""
     global edit_mode
     edit_mode = not edit_mode
     if PRINT_DEBUG: print(f"[DEBUG] UI: Edit Mode {'ENABLED' if edit_mode else 'DISABLED'}")
     update_ui_all()
 
 def save_preset_to_button(btn_id: str) -> None:
-    """Captures current amp state and stores it in a preset slot mapped to a specific button."""
     global edit_mode
     name = MODE_MAPPINGS["PRESET"].get(btn_id) or f"PRESET_{btn_id}"
     MODE_MAPPINGS["PRESET"][btn_id] = name
@@ -532,7 +528,6 @@ class ButtonHandler:
         self.btn.when_held = self.handle_hold
 
     def handle_hold(self) -> None:
-        """Long press toggles an effect on/off in direct mode."""
         global last_interaction_time
         last_interaction_time, self.was_held = time.time(), True
         if PRINT_DEBUG: print(f"[DEBUG] INPUT: HELD {self.btn_id} (Pin: {self.pin})")
@@ -541,7 +536,6 @@ class ButtonHandler:
             if target in SETTINGS: katana.toggle_effect(target)
 
     def handle_release(self) -> None:
-        """Short press either cycles effect values, applies presets, or saves presets depending on mode."""
         global last_interaction_time
         if not self.was_held:
             last_interaction_time = time.time()
@@ -561,7 +555,6 @@ if __name__ == "__main__":
         delayed_init()
         threading.Thread(target=refresh_worker, daemon=True).start()
         if ENABLE_WEB: web_server.run()
-    # Explicitly pass target= to avoid argument interpretation errors in certain Python versions
     threading.Thread(target=background_init, daemon=True).start()
     while 'mido' not in globals(): time.sleep(0.1)
     katana.connect(start_time)
