@@ -33,6 +33,7 @@ if "-h" in sys.argv or "--help" in sys.argv:
     print_usage()
 
 # --- MINIMAL STARTUP CONSTANTS ---
+# Standard Roland/Boss Sysex header for Katana
 KATANA_HEADER: List[int] = [0x41, 0x10, 0x01, 0x05, 0x07]
 CMD_DT1: int = 0x12  # Data set command
 CMD_RQ1: int = 0x11  # Request data command
@@ -44,10 +45,14 @@ edit_mode: bool = False
 last_interaction_time: float = 0.0
 start_time: float = time.time()
 handlers: List[ButtonHandler] = []
-lcd_lock: threading.Lock = threading.Lock() 
+lcd_lock: threading.Lock = threading.Lock() # Lock to prevent SPI bus contention
 
 # --- DELAYED IMPORTS & LOGIC WRAPPER ---
 def delayed_init() -> None:
+    """
+    Import heavy modules and load config after the splash screen is visible.
+    This significantly improves perceived startup time on Raspberry Pi.
+    """
     global mido, json, Button, Flask, SocketIO, emit, spi, ili9341, canvas, Image, ImageDraw, ImageFont
     global GPIO_CONFIG, MODE_MAPPINGS, PRESETS, LCD_ORDER, web_server
 
@@ -63,23 +68,32 @@ def delayed_init() -> None:
 
     load_config()
 
+    # Initialize hardware button handlers now that gpiozero.Button is imported
     global handlers, mode_btn, edit_btn
     handlers = [ButtonHandler(btn_id, pin) for btn_id, pin in GPIO_CONFIG.items()]
 
+    # Setup dedicated system buttons for mode switching and preset editing
     mode_btn = Button(MODE_SWITCH_PIN, pull_up=True, bounce_time=0.05)
-    mode_btn.when_pressed = lambda: toggle_global_mode()
+    mode_btn.when_pressed = lambda: (
+        print(f"[DEBUG] SYSTEM: MODE SWITCH (Pin: {MODE_SWITCH_PIN})") if PRINT_DEBUG else None,
+        toggle_global_mode()
+    )
 
     edit_btn = Button(PRESET_EDIT_PIN, pull_up=True, bounce_time=0.05)
-    edit_btn.when_pressed = lambda: toggle_preset_edit()
+    edit_btn.when_pressed = lambda: (
+        print(f"[DEBUG] SYSTEM: PRESET EDIT (Pin: {PRESET_EDIT_PIN})") if PRINT_DEBUG else None,
+        toggle_preset_edit()
+    )
 
+    # Initialize Web server with the getter and control callbacks
     web_server = WebHandler(
         state_getter=get_full_state_dict,
-        toggle_mode_fn=toggle_global_mode,
-        toggle_edit_fn=toggle_preset_edit,
-        save_preset_fn=save_preset_to_button,
+        toggle_mode_fn=lambda: toggle_global_mode(),
+        toggle_edit_fn=lambda: toggle_preset_edit(),
+        save_preset_fn=lambda bid: save_preset_to_button(bid),
         control_btn_fn=handle_web_control,
         update_map_fn=update_switch_mapping,
-        update_preset_fn=update_preset_content # New functionality
+        update_preset_fn=update_preset_content
     )
 
 # --- CONFIGURATION PERSISTENCE ---
@@ -117,6 +131,7 @@ PRESETS: Dict[str, Dict[str, str]] = {}
 LCD_ORDER: List[str] = []
 
 def load_config() -> None:
+    """Reads configuration from config.json or falls back to hardcoded defaults."""
     global GPIO_CONFIG, MODE_MAPPINGS, PRESETS, LCD_ORDER
     if os.path.exists(CONFIG_FILE):
         try:
@@ -126,11 +141,14 @@ def load_config() -> None:
                 MODE_MAPPINGS = data.get("MODE_MAPPINGS", DEFAULT_MODE_MAPPINGS)
                 PRESETS = data.get("PRESETS", DEFAULT_PRESETS)
                 LCD_ORDER = data.get("LCD_ORDER", DEFAULT_LCD_ORDER)
+                if PRINT_DEBUG: print(f"[DEBUG] Config loaded from {CONFIG_FILE}")
                 return
         except Exception: pass
     GPIO_CONFIG, MODE_MAPPINGS, PRESETS, LCD_ORDER = DEFAULT_GPIO_CONFIG, DEFAULT_MODE_MAPPINGS, DEFAULT_PRESETS, DEFAULT_LCD_ORDER
+    if PRINT_DEBUG: print("[DEBUG] Defaults loaded")
 
 def save_config() -> None:
+    """Writes the current runtime configuration (mappings/presets/order) to config.json."""
     try:
         data = {
             "GPIO_CONFIG": GPIO_CONFIG, 
@@ -139,8 +157,10 @@ def save_config() -> None:
             "LCD_ORDER": LCD_ORDER
         }
         with open(CONFIG_FILE, 'w') as f: json.dump(data, f, indent=4)
+        if PRINT_DEBUG: print(f"[DEBUG] Config saved to {CONFIG_FILE}")
     except Exception: pass
 
+# --- COMMAND LINE ARGUMENTS ---
 PRINT_LATENCY: bool = "-t" in sys.argv
 PRINT_DEBUG: bool = "-d" in sys.argv 
 ENABLE_WEB: bool = "-w" in sys.argv
@@ -167,6 +187,7 @@ STATE_COLORS: Dict[str, str] = {"GREEN": "#00FF00", "GRN": "#00FF00", "RED": "#F
 LABEL_BG_COLOR: str = "#0a024d"
 
 class KatanaHandler:
+    """Manages MIDI communication with the Boss Katana amplifier."""
     def __init__(self, on_change_callback: Callable[[], None]) -> None:
         self.on_change = on_change_callback
         self.current_vals: Dict[str, int] = {key: 0 for key in SETTINGS}
@@ -200,6 +221,7 @@ class KatanaHandler:
                 if k_out and k_in:
                     self.outport = mido.open_output(k_out[0])
                     self.inport = mido.open_input(k_in[0])
+                    if PRINT_DEBUG: print(f"[DEBUG] Connected to {k_out[0]}")
                     self.app_status = "SYNC"
                     self._prefill_cache()
                     self.on_change()
@@ -255,6 +277,7 @@ class KatanaHandler:
         if not self.active_states[key] and "sw_addr" in SETTINGS[key]:
             self.active_states[key] = True
             self.outport.send(self._create_sysex_msg(CMD_DT1, SETTINGS[key]["sw_addr"], [0x01]))
+        if PRINT_DEBUG: print(f"[DEBUG] MIDI: Cycled {key} to {SETTINGS[key]['vals'][self.current_vals[key]]}")
         self.on_change()
 
     def toggle_effect(self, key: str) -> None:
@@ -262,11 +285,13 @@ class KatanaHandler:
         self.active_states[key] = not self.active_states[key]
         val = 0x01 if self.active_states[key] else 0x00
         self.outport.send(self._create_sysex_msg(CMD_DT1, SETTINGS[key]["sw_addr"], [val]))
+        if PRINT_DEBUG: print(f"[DEBUG] MIDI: Toggled {key} {'ON' if self.active_states[key] else 'OFF'}")
         self.on_change()
 
     def apply_preset(self, preset_name: str) -> None:
         if self.app_status != "OK" or not self.outport: return
         data = PRESETS.get(preset_name, {})
+        if PRINT_DEBUG: print(f"[DEBUG] OP: Applying Preset '{preset_name}'")
         for key, target in data.items():
             if key not in SETTINGS: continue
             cfg = SETTINGS[key]
@@ -288,6 +313,7 @@ class KatanaHandler:
         self.on_change()
 
 class LCDHandler:
+    """Manages the SPI-connected LCD screen display."""
     def __init__(self) -> None:
         self.device: Optional[ili9341] = None
         try:
@@ -303,6 +329,7 @@ class LCDHandler:
         self._splash_cleared = False
 
     def _get_font(self, size: int) -> FreeTypeFont:
+        """Helper to load a TrueType font with multiple fallback paths."""
         paths = ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf", "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf", "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf"]
         from PIL import ImageFont
         for path in paths:
@@ -312,6 +339,7 @@ class LCDHandler:
         return ImageFont.load_default()
 
     def _load_fonts(self) -> None:
+        """Loads TrueType fonts for the display grid."""
         if self.label_font: return
         self.label_font = self._get_font(14)
         self.value_font = self._get_font(16)
@@ -319,7 +347,10 @@ class LCDHandler:
         self.mode_font = self._get_font(18)
 
     def update(self, app_status: str, current_mode: str, edit_mode: bool, current_vals: Dict[str, int], active_states: Dict[str, bool], start_time: float) -> None:
+        """Renders the current system state to the LCD screen."""
         if not self.device: return
+
+        # SPI access must be synchronized to prevent graphical corruption
         with lcd_lock:
             showing_splash = time.time() - start_time < 5.0 or app_status in ["INIT", "SYNC"]
             if showing_splash and app_status != "NO_USB":
@@ -333,6 +364,7 @@ class LCDHandler:
                         return
                 except Exception: pass
 
+            # Wipe the screen once when the splash sequence ends
             if not showing_splash and not self._splash_cleared:
                 self.device.clear()
                 self._splash_cleared = True
@@ -350,7 +382,10 @@ class LCDHandler:
                     if self.status_font: draw.text((screen_w // 2 - 130, screen_h // 2 - 35), msg, fill="yellow", font=self.status_font)
                     return
 
+                # Render Grid Layout
                 row0_h, slot_h, slot_w, label_h = 60, (screen_h - 60) // 2, screen_w // 4, 25
+
+                # Header background
                 draw.rectangle([0, 0, screen_w, row0_h], fill="#111111", outline="#333333")
                 if self.label_font and self.mode_font:
                     draw.text((10, 5), f"MODE: {current_mode}", fill="cyan" if current_mode == "DIRECT" else "magenta", font=self.label_font)
@@ -364,11 +399,15 @@ class LCDHandler:
                     if key not in SETTINGS: continue
                     is_active = active_states.get(key, True)
                     val_text = SETTINGS[key]["vals"][current_vals[key]] if is_active else "OFF"
-                    if key == "Amp": fill, text_color = "#111111", "white"
+
+                    # Color logic
+                    if key == "Amp":
+                        fill, text_color = "#111111", "white"
                     else:
                         text_color = "black" if val_text.upper() in ["GREEN", "YELLOW", "RED", "GRN", "YEL"] else "white"
                         fill = STATE_COLORS.get(val_text, CAT_COLORS.get(SETTINGS[key]["cat"], "#444444")) if is_active else STATE_COLORS["OFF"]
 
+                    # Slot Drawing
                     draw.rectangle([x, y, x+slot_w-2, y+label_h], outline="#333", fill=LABEL_BG_COLOR)
                     draw.rectangle([x, y+label_h, x+slot_w-2, y+slot_h-2], outline="#333", fill=fill)
 
@@ -378,6 +417,7 @@ class LCDHandler:
                             draw.text((x+6, y+label_h+2), val_text[:6], fill=text_color, font=self.value_font)
 
 class WebHandler:
+    """Manages the optional Flask web interface for remote control."""
     def __init__(self, state_getter, toggle_mode_fn, toggle_edit_fn, save_preset_fn, control_btn_fn, update_map_fn, update_preset_fn) -> None:
         self.app: Flask = Flask(__name__)
         self.socketio: SocketIO = SocketIO(self.app, cors_allowed_origins="*", async_mode='threading')
@@ -409,11 +449,13 @@ class WebHandler:
     def run(self, host: str = '0.0.0.0', port: int = 5000) -> None:
         self.socketio.run(self.app, host=host, port=port, debug=False, use_reloader=False, allow_unsafe_werkzeug=True)
 
+# Helper functions for UI and logic coordination
 def on_katana_change() -> None: update_ui_all()
 katana: KatanaHandler = KatanaHandler(on_change_callback=on_katana_change)
 lcd: LCDHandler = LCDHandler()
 
 def get_full_state_dict() -> Dict[str, Any]:
+    """Compiles the entire application state into a dictionary for JSON serialization."""
     settings_data = {k: SETTINGS[k]["vals"][katana.current_vals[k]] for k in SETTINGS}
     return {
         "settings": settings_data, 
@@ -424,11 +466,12 @@ def get_full_state_dict() -> Dict[str, Any]:
         "status": katana.app_status, 
         "mapped": MODE_MAPPINGS[current_mode], 
         "hidden": HIDDEN_FROM_LCD,
-        "presets": PRESETS, # Added
-        "settings_meta": {k: ["OFF"] + SETTINGS[k]["vals"] if "sw_addr" in SETTINGS[k] else SETTINGS[k]["vals"] for k in SETTINGS} # Added
+        "presets": PRESETS,
+        "settings_meta": {k: ["OFF"] + SETTINGS[k]["vals"] if "sw_addr" in SETTINGS[k] else SETTINGS[k]["vals"] for k in SETTINGS}
     }
 
 def handle_web_control(btn_id: str, action: str) -> None:
+    """Bridge for control actions received from the web interface."""
     if edit_mode: return
     target = MODE_MAPPINGS[current_mode].get(btn_id)
     if not target: return
@@ -436,9 +479,11 @@ def handle_web_control(btn_id: str, action: str) -> None:
     else: katana.toggle_effect(target) if action == 'toggle' else katana.cycle_effect(target)
 
 def update_switch_mapping(mode: str, btn_id: str, target: str) -> None:
+    """Updates the mapping of a physical switch and saves to disk."""
     if mode in MODE_MAPPINGS and btn_id in MODE_MAPPINGS[mode]:
         MODE_MAPPINGS[mode][btn_id] = target
         save_config()
+        if PRINT_DEBUG: print(f"[DEBUG] OP: Updated {mode} mapping for {btn_id} to {target}")
         update_ui_all()
 
 def update_preset_content(preset_name: str, settings: Dict[str, str]) -> None:
@@ -446,13 +491,16 @@ def update_preset_content(preset_name: str, settings: Dict[str, str]) -> None:
     if preset_name in PRESETS:
         PRESETS[preset_name].update(settings)
         save_config()
+        if PRINT_DEBUG: print(f"[DEBUG] OP: Updated Content of Preset '{preset_name}'")
         update_ui_all()
 
 def update_ui_all() -> None:
+    """Triggers refresh for both the physical LCD and the web interface."""
     lcd.update(katana.app_status, current_mode, edit_mode, katana.current_vals, katana.active_states, start_time)
     if ENABLE_WEB: web_server.push_state()
 
 def refresh_worker() -> None:
+    """Background loop that periodically re-syncs settings from the amp."""
     while True:
         if katana.app_status in ["SYNC", "OK"] and katana.outport:
             for key, cfg in SETTINGS.items():
@@ -467,11 +515,13 @@ def toggle_global_mode() -> None:
     global current_mode
     if edit_mode: return
     current_mode = "PRESET" if current_mode == "DIRECT" else "DIRECT"
+    if PRINT_DEBUG: print(f"[DEBUG] UI: Switched Mode to {current_mode}")
     update_ui_all()
 
 def toggle_preset_edit() -> None:
     global edit_mode
     edit_mode = not edit_mode
+    if PRINT_DEBUG: print(f"[DEBUG] UI: Edit Mode {'ENABLED' if edit_mode else 'DISABLED'}")
     update_ui_all()
 
 def save_preset_to_button(btn_id: str) -> None:
@@ -480,10 +530,12 @@ def save_preset_to_button(btn_id: str) -> None:
     MODE_MAPPINGS["PRESET"][btn_id] = name
     PRESETS[name] = {k: ("OFF" if not katana.active_states.get(k, True) else SETTINGS[k]["vals"][katana.current_vals[k]]) for k in SETTINGS}
     edit_mode = False
+    if PRINT_DEBUG: print(f"[DEBUG] OP: Saved Preset '{name}' to {btn_id}")
     save_config()
     update_ui_all()
 
 class ButtonHandler:
+    """Manages input from physical GPIO buttons."""
     def __init__(self, btn_id: str, pin: int) -> None:
         self.btn_id, self.pin, self.was_held = btn_id, pin, False
         self.btn = Button(pin, pull_up=True, bounce_time=0.03, hold_time=0.6)
@@ -493,6 +545,7 @@ class ButtonHandler:
     def handle_hold(self) -> None:
         global last_interaction_time
         last_interaction_time, self.was_held = time.time(), True
+        if PRINT_DEBUG: print(f"[DEBUG] INPUT: HELD {self.btn_id} (Pin: {self.pin})")
         if not edit_mode and current_mode == "DIRECT":
             target = MODE_MAPPINGS["DIRECT"].get(self.btn_id)
             if target in SETTINGS: katana.toggle_effect(target)
@@ -501,6 +554,7 @@ class ButtonHandler:
         global last_interaction_time
         if not self.was_held:
             last_interaction_time = time.time()
+            if PRINT_DEBUG: print(f"[DEBUG] INPUT: RELEASED {self.btn_id} (Pin: {self.pin})")
             if edit_mode:
                 save_preset_to_button(self.btn_id)
                 return
