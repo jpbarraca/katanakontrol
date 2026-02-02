@@ -18,7 +18,6 @@
             box-shadow: 0 0 50px rgba(0,0,0,1), inset 0 0 20px rgba(255,255,255,0.05);
         }
 
-        /* The LCD Screen in the middle */
         .lcd-container { 
             grid-column: 2; grid-row: 1; background: #050505; border: 10px solid #2a2a2a; border-radius: 10px;
             display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); gap: 4px; padding: 4px;
@@ -28,11 +27,10 @@
         .lcd-label { background: #0a024d; color: white; padding: 2px 4px; font-weight: bold; text-transform: uppercase; border-bottom: 1px solid rgba(255,255,255,0.1); }
         .lcd-value { flex-grow: 1; display: flex; align-items: center; justify-content: center; font-weight: 800; text-align: center; }
 
-        /* Stomp Switches on sides and bottom */
         .side-switches { display: flex; flex-direction: column; justify-content: space-around; align-items: center; }
         .bottom-switches { grid-column: 1 / span 3; display: flex; justify-content: space-around; align-items: center; }
 
-        .stomp-wrapper { display: flex; flex-direction: column; align-items: center; gap: 8px; cursor: pointer; }
+        .stomp-wrapper { display: flex; flex-direction: column; align-items: center; gap: 8px; cursor: pointer; position: relative; }
         .stomp-led { width: 12px; height: 12px; border-radius: 50%; background: #333; box-shadow: 0 0 2px #000; transition: all 0.2s; }
         .stomp-switch { 
             width: 60px; height: 60px; background: radial-gradient(circle at 30% 30%, #888, #222); 
@@ -42,30 +40,50 @@
         .stomp-wrapper:active .stomp-switch { transform: translateY(4px); box-shadow: 0 2px 0 #111; }
         .stomp-label { font-size: 0.7em; font-weight: bold; color: #888; text-transform: uppercase; letter-spacing: 1px; }
 
-        /* Overlay for Edit Mode */
         .edit-overlay { 
             position: absolute; top:0; left:0; width:100%; height:100%; background: rgba(255,0,0,0.4); 
             display: none; justify-content: center; align-items: center; z-index: 100; border-radius: 16px; pointer-events: none;
         }
         .edit-overlay.show { display: flex; }
         .edit-text { background: #000; color: #fff; padding: 20px; border: 4px solid red; font-weight: bold; font-size: 1.5em; border-radius: 10px; }
+
+        #mapModal {
+            display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: #222; padding: 20px; border-radius: 12px; border: 2px solid #444; z-index: 1000;
+            min-width: 250px; box-shadow: 0 0 50px #000;
+        }
+        #mapModal h3 { margin-top: 0; color: #00ffcc; font-size: 0.9em; }
+        #mapModal select { width: 100%; padding: 10px; background: #333; color: #fff; border: 1px solid #555; border-radius: 5px; margin-bottom: 15px; }
+        #mapModal .actions { display: flex; gap: 10px; justify-content: flex-end; }
+        #mapModal button { padding: 8px 15px; border-radius: 4px; border: none; cursor: pointer; font-weight: bold; }
+        .btn-save { background: #28a745; color: white; }
+        .btn-cancel { background: #dc3545; color: white; }
+
+        .config-mode-indicator { 
+            position: absolute; top: 10px; right: 20px; font-size: 10px; color: #555; 
+            background: #222; padding: 4px 8px; border-radius: 10px; cursor: pointer; z-index: 101;
+        }
+        .config-mode-active { color: #00ffcc; border: 1px solid #00ffcc; }
     </style>
 </head>
 <body>
     <div class="pedal-board">
+        <div class="config-mode-indicator" id="configToggle" onclick="toggleLocalConfigMode()">CONFIG MODE: OFF</div>
         <div class="edit-overlay" id="editOverlay"><div class="edit-text">SAVE TO PRESET SLOT</div></div>
         
-        <!-- Left Side: Buttons 4, 5, 6 -->
         <div class="side-switches" id="leftSwitches"></div>
-
-        <!-- Middle: LCD -->
         <div class="lcd-container" id="lcd"></div>
-
-        <!-- Right Side: Mode, Edit, Sync -->
         <div class="side-switches" id="rightSwitches"></div>
-
-        <!-- Bottom: Buttons 1, 2, 3 -->
         <div class="bottom-switches" id="bottomSwitches"></div>
+    </div>
+
+    <div id="mapModal">
+        <h3 id="modalTitle">Map Switch</h3>
+        <select id="mapSelect"></select>
+        <div class="actions">
+            <button class="btn-cancel" onclick="closeMapModal()">Cancel</button>
+            <button class="btn-save" onclick="saveMap()">Save</button>
+        </div>
     </div>
 
     <script>
@@ -73,6 +91,17 @@
         const CAT_COLORS = {{ cat_colors|tojson }};
         const STATE_COLORS = {{ state_colors|tojson }};
         const HIDDEN = {{ hidden|tojson }};
+        
+        let localState = null;
+        let configMode = false;
+        let activeBtnForMap = null;
+
+        function toggleLocalConfigMode() {
+            configMode = !configMode;
+            const el = document.getElementById('configToggle');
+            el.innerText = `CONFIG MODE: ${configMode ? 'ON' : 'OFF'}`;
+            el.className = configMode ? 'config-mode-indicator config-mode-active' : 'config-mode-indicator';
+        }
 
         function createStomp(id, labelText) {
             return `
@@ -84,92 +113,106 @@
             `;
         }
 
-        function renderUI(data) {
-            document.getElementById('editOverlay').className = data.edit_mode ? 'edit-overlay show' : 'edit-overlay';
+        function openMapModal(btnId) {
+            activeBtnForMap = btnId;
+            const modal = document.getElementById('mapModal');
+            const select = document.getElementById('mapSelect');
+            const title = document.getElementById('modalTitle');
             
-            // 1. Render LCD Segments
+            title.innerText = `Map ${btnId} (${localState.mode})`;
+            select.innerHTML = '';
+
+            const options = localState.mode === 'DIRECT' 
+                ? Object.keys(localState.settings) 
+                : Object.values(localState.mapped); 
+
+            options.forEach(opt => {
+                const o = document.createElement('option');
+                o.value = opt; o.text = opt;
+                if (localState.mapped[btnId] === opt) o.selected = true;
+                select.appendChild(o);
+            });
+            modal.style.display = 'block';
+        }
+
+        function closeMapModal() {
+            document.getElementById('mapModal').style.display = 'none';
+            activeBtnForMap = null;
+        }
+
+        function saveMap() {
+            const newVal = document.getElementById('mapSelect').value;
+            socket.emit('update_mapping', { 
+                mode: localState.mode, btn_id: activeBtnForMap, target: newVal 
+            });
+            closeMapModal();
+        }
+
+        function renderUI(data) {
+            localState = data;
+            document.getElementById('editOverlay').className = data.edit_mode ? 'edit-overlay show' : 'edit-overlay';
             const lcd = document.getElementById('lcd');
             lcd.innerHTML = '';
-            const allKeys = Object.keys(data.settings);
-            const displayKeys = allKeys.filter(k => !HIDDEN.includes(k));
+            const displayKeys = Object.keys(data.settings).filter(k => !HIDDEN.includes(k));
 
             for(let i=0; i<9; i++) {
                 const div = document.createElement('div');
                 div.className = 'lcd-segment';
-                
                 if (i === 8) {
                     div.style.background = '#222';
                     div.innerHTML = `<div class="lcd-label" style="background:#444">MODE</div><div class="lcd-value" style="color:${data.mode === 'DIRECT' ? 'cyan' : 'magenta'}">${data.mode}</div>`;
                 } else {
                     const key = displayKeys[i];
                     if (!key) { div.style.background = '#000'; lcd.appendChild(div); continue; }
-                    const val = data.settings[key];
                     const active = data.active[key];
-                    const valText = active ? val : 'OFF';
+                    const valText = active ? data.settings[key] : 'OFF';
                     let bg = active ? (STATE_COLORS[valText] || CAT_COLORS[data.cats[key]]) : '#222';
-                    const textCol = (['YELLOW', 'YEL', 'GREEN', 'GRN'].includes(valText)) ? 'black' : 'white';
                     div.style.backgroundColor = bg;
-                    div.style.color = textCol;
+                    div.style.color = (['YELLOW', 'YEL', 'GREEN', 'GRN'].includes(valText)) ? 'black' : 'white';
                     div.innerHTML = `<div class="lcd-label">${key}</div><div class="lcd-value">${valText}</div>`;
                 }
                 lcd.appendChild(div);
             }
 
-            // 2. Render External Switches (Sides and Bottom)
             const left = document.getElementById('leftSwitches');
             const right = document.getElementById('rightSwitches');
             const bottom = document.getElementById('bottomSwitches');
-
-            // Arrangement of 9 stomp points: BTN 1-6, Mode, Edit, and Sync
             const stompMap = [
-                {id: 'BTN_4', label: 'MOD', target: 'left'},
-                {id: 'BTN_5', label: 'FX', target: 'left'},
-                {id: 'BTN_6', label: 'SOLO', target: 'left'},
-                {id: 'MODE',  label: 'MODE', target: 'right'},
-                {id: 'EDIT',  label: 'EDIT', target: 'right'},
-                {id: 'SYNC',  label: 'SYNC', target: 'right'},
-                {id: 'BTN_1', label: 'AMP/CH1', target: 'bottom'},
-                {id: 'BTN_2', label: 'VAR/CH2', target: 'bottom'},
-                {id: 'BTN_3', label: 'BST/CH3', target: 'bottom'}
+                {id: 'BTN_4', target: 'left'}, {id: 'BTN_5', target: 'left'}, {id: 'BTN_6', target: 'left'},
+                {id: 'MODE', label: 'MODE', target: 'right'}, {id: 'EDIT', label: 'EDIT', target: 'right'}, {id: 'SYNC', label: 'SYNC', target: 'right'},
+                {id: 'BTN_1', target: 'bottom'}, {id: 'BTN_2', target: 'bottom'}, {id: 'BTN_3', target: 'bottom'}
             ];
 
             left.innerHTML = ''; right.innerHTML = ''; bottom.innerHTML = '';
-
             stompMap.forEach(s => {
                 const container = s.target === 'left' ? left : (s.target === 'right' ? right : bottom);
                 const wrap = document.createElement('div');
-                wrap.innerHTML = createStomp(s.id, s.label);
+                const label = s.label || data.mapped[s.id] || s.id;
+                wrap.innerHTML = createStomp(s.id, label);
                 const el = wrap.firstElementChild;
-                
-                // LED Logic
                 const led = el.querySelector('.stomp-led');
+                
                 if (s.id.startsWith('BTN')) {
-                    const settingKey = data.mapped[s.id]; 
-                    const isActive = data.active[settingKey];
-                    const valText = data.settings[settingKey];
-                    if (isActive) {
-                        led.style.background = STATE_COLORS[valText] || CAT_COLORS[data.cats[settingKey]] || 'red';
+                    const target = data.mapped[s.id];
+                    if (data.active[target]) {
+                        led.style.background = STATE_COLORS[data.settings[target]] || CAT_COLORS[data.cats[target]] || 'red';
                         led.style.boxShadow = `0 0 10px ${led.style.background}`;
                     }
                 } else if (s.id === 'MODE') {
                     led.style.background = data.mode === 'DIRECT' ? 'cyan' : 'magenta';
                     led.style.boxShadow = `0 0 10px ${led.style.background}`;
-                } else if (s.id === 'EDIT') {
-                    if (data.edit_mode) {
-                        led.style.background = 'red';
-                        led.style.boxShadow = `0 0 15px red`;
-                    }
+                } else if (s.id === 'EDIT' && data.edit_mode) {
+                    led.style.background = 'red'; led.style.boxShadow = `0 0 15px red`;
                 }
 
-                // Click Logic
                 el.onclick = () => {
+                    if (configMode && s.id.startsWith('BTN')) { openMapModal(s.id); return; }
                     if (s.id === 'MODE') socket.emit('toggle_mode');
                     else if (s.id === 'EDIT') socket.emit('toggle_edit');
                     else if (s.id === 'SYNC') location.reload();
                     else {
-                        if (data.edit_mode) {
-                            socket.emit('save_to_slot', { btn_id: s.id });
-                        } else {
+                        if (data.edit_mode) socket.emit('save_to_slot', { btn_id: s.id });
+                        else {
                             const now = Date.now();
                             const action = (now - (el.lastTouch || 0) < 400) ? 'toggle' : 'cycle';
                             socket.emit('control_by_btn', { btn_id: s.id, action: action });
@@ -180,7 +223,6 @@
                 container.appendChild(el);
             });
         }
-
         socket.on('state_update', (data) => renderUI(data));
     </script>
 </body>
