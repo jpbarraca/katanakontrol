@@ -47,17 +47,24 @@
         .edit-overlay.show { display: flex; }
         .edit-text { background: #000; color: #fff; padding: 20px; border: 4px solid red; font-weight: bold; font-size: 1.5em; border-radius: 10px; }
 
-        #mapModal {
+        #mapModal, #presetModal {
             display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
             background: #222; padding: 20px; border-radius: 12px; border: 2px solid #444; z-index: 1000;
-            min-width: 250px; box-shadow: 0 0 50px #000;
+            min-width: 300px; box-shadow: 0 0 50px #000;
+            max-height: 90vh; overflow-y: auto;
         }
-        #mapModal h3 { margin-top: 0; color: #00ffcc; font-size: 0.9em; }
-        #mapModal select { width: 100%; padding: 10px; background: #333; color: #fff; border: 1px solid #555; border-radius: 5px; margin-bottom: 15px; }
-        #mapModal .actions { display: flex; gap: 10px; justify-content: flex-end; }
-        #mapModal button { padding: 8px 15px; border-radius: 4px; border: none; cursor: pointer; font-weight: bold; }
+        #mapModal h3, #presetModal h3 { margin-top: 0; color: #00ffcc; font-size: 0.9em; }
+        #mapModal select, #presetModal select { width: 100%; padding: 10px; background: #333; color: #fff; border: 1px solid #555; border-radius: 5px; margin-bottom: 15px; }
+        
+        .preset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }
+        .preset-item { display: flex; flex-direction: column; font-size: 0.75em; }
+        .preset-item label { margin-bottom: 4px; color: #aaa; font-weight: bold; }
+
+        #mapModal .actions, #presetModal .actions { display: flex; gap: 10px; justify-content: flex-end; }
+        #mapModal button, #presetModal button { padding: 8px 15px; border-radius: 4px; border: none; cursor: pointer; font-weight: bold; }
         .btn-save { background: #28a745; color: white; }
         .btn-cancel { background: #dc3545; color: white; }
+        .btn-edit { background: #007bff; color: white; width: 100%; margin-bottom: 10px; }
 
         .config-mode-indicator { 
             position: absolute; top: 10px; right: 20px; font-size: 10px; color: #555; 
@@ -77,12 +84,27 @@
         <div class="bottom-switches" id="bottomSwitches"></div>
     </div>
 
+    <!-- Mapping Modal -->
     <div id="mapModal">
         <h3 id="modalTitle">Map Switch</h3>
+        <div id="presetEditAction" style="display:none">
+            <button class="btn-edit" id="btnEditPreset">Edit Preset Content</button>
+        </div>
+        <label style="font-size: 0.7em; color: #888;">Select Assignment:</label>
         <select id="mapSelect"></select>
         <div class="actions">
             <button class="btn-cancel" onclick="closeMapModal()">Cancel</button>
             <button class="btn-save" onclick="saveMap()">Save</button>
+        </div>
+    </div>
+
+    <!-- Preset Content Editor -->
+    <div id="presetModal">
+        <h3 id="presetTitle">Edit Preset</h3>
+        <div class="preset-grid" id="presetForm"></div>
+        <div class="actions">
+            <button class="btn-cancel" onclick="closePresetModal()">Cancel</button>
+            <button class="btn-save" onclick="savePresetContent()">Save Preset</button>
         </div>
     </div>
 
@@ -95,6 +117,7 @@
         let localState = null;
         let configMode = false;
         let activeBtnForMap = null;
+        let activePresetName = null;
 
         function toggleLocalConfigMode() {
             configMode = !configMode;
@@ -118,20 +141,38 @@
             const modal = document.getElementById('mapModal');
             const select = document.getElementById('mapSelect');
             const title = document.getElementById('modalTitle');
+            const editAction = document.getElementById('presetEditAction');
+            const editBtn = document.getElementById('btnEditPreset');
             
             title.innerText = `Map ${btnId} (${localState.mode})`;
             select.innerHTML = '';
 
-            const options = localState.mode === 'DIRECT' 
-                ? Object.keys(localState.settings) 
-                : Object.values(localState.mapped); 
-
-            options.forEach(opt => {
-                const o = document.createElement('option');
-                o.value = opt; o.text = opt;
-                if (localState.mapped[btnId] === opt) o.selected = true;
-                select.appendChild(o);
-            });
+            if (localState.mode === 'PRESET') {
+                editAction.style.display = 'block';
+                const currentPreset = localState.mapped[btnId];
+                editBtn.onclick = () => {
+                    closeMapModal();
+                    openPresetModal(currentPreset);
+                };
+                
+                // Show available presets
+                const presetList = Object.keys(localState.presets);
+                presetList.forEach(p => {
+                    const o = document.createElement('option');
+                    o.value = p; o.text = p;
+                    if (currentPreset === p) o.selected = true;
+                    select.appendChild(o);
+                });
+            } else {
+                editAction.style.display = 'none';
+                // Show available direct settings
+                Object.keys(localState.settings).forEach(opt => {
+                    const o = document.createElement('option');
+                    o.value = opt; o.text = opt;
+                    if (localState.mapped[btnId] === opt) o.selected = true;
+                    select.appendChild(o);
+                });
+            }
             modal.style.display = 'block';
         }
 
@@ -146,6 +187,63 @@
                 mode: localState.mode, btn_id: activeBtnForMap, target: newVal 
             });
             closeMapModal();
+        }
+
+        function openPresetModal(presetName) {
+            if (!presetName) return;
+            activePresetName = presetName;
+            const modal = document.getElementById('presetModal');
+            const title = document.getElementById('presetTitle');
+            const form = document.getElementById('presetForm');
+            
+            title.innerText = `Edit Preset: ${presetName}`;
+            form.innerHTML = '';
+
+            const presetData = localState.presets[presetName] || {};
+            const meta = localState.settings_meta;
+
+            Object.keys(meta).forEach(key => {
+                const item = document.createElement('div');
+                item.className = 'preset-item';
+                
+                const label = document.createElement('label');
+                label.innerText = key;
+                
+                const select = document.createElement('select');
+                select.id = `preset-val-${key}`;
+                
+                meta[key].forEach(val => {
+                    const o = document.createElement('option');
+                    o.value = val; o.text = val;
+                    if (presetData[key] === val) o.selected = true;
+                    select.appendChild(o);
+                });
+
+                item.appendChild(label);
+                item.appendChild(select);
+                form.appendChild(item);
+            });
+
+            modal.style.display = 'block';
+        }
+
+        function closePresetModal() {
+            document.getElementById('presetModal').style.display = 'none';
+            activePresetName = null;
+        }
+
+        function savePresetContent() {
+            const settings = {};
+            const meta = localState.settings_meta;
+            Object.keys(meta).forEach(key => {
+                settings[key] = document.getElementById(`preset-val-${key}`).value;
+            });
+
+            socket.emit('update_preset', {
+                preset_name: activePresetName,
+                settings: settings
+            });
+            closePresetModal();
         }
 
         function renderUI(data) {
